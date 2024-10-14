@@ -80,24 +80,21 @@ pub fn prepare_mint_token_instruction(
     // The Associated Token Program uses Cross Program Invocations to handle:
     // Invoking the System Program to create a new account using the provided PDA as the address of the new account
     // Invoking the Token Program to initialize the Token Account data for the new account.
-           // 使用 create_associated_token_account = system_instruction::create_account + spl_token_2022::instruction::initialize_account3 + .....
-        // https://explorer.solana.com/tx/58EDj9im952aomeiqa6iWH7wWA9uyQtWAHRJDXUE4by63jckAHMbMWkoAxsTF1JBvF8t2TWPvGQ9fCTpqbyJ8UjK?cluster=devnet
-    let ata_account =
-        spl_associated_token_account::get_associated_token_address_with_program_id(
-            &wallet_keypair.pubkey(),
-            &mint_account,
-            &spl_token_2022::id(),
-        );
+    // 使用 create_associated_token_account = system_instruction::create_account + spl_token_2022::instruction::initialize_account3 + .....
+    // https://explorer.solana.com/tx/58EDj9im952aomeiqa6iWH7wWA9uyQtWAHRJDXUE4by63jckAHMbMWkoAxsTF1JBvF8t2TWPvGQ9fCTpqbyJ8UjK?cluster=devnet
+    let ata_account = spl_associated_token_account::get_associated_token_address_with_program_id(
+        &wallet_keypair.pubkey(),
+        &mint_account,
+        &spl_token_2022::id(),
+    );
     println!("ata_account: {}", ata_account.to_string());
-    
-    let create_ata_ix =
-        spl_associated_token_account::instruction::create_associated_token_account(
-            &wallet_keypair.pubkey(),
-            &wallet_keypair.pubkey(),
-            &mint_account,
-            &spl_token_2022::id(),
-        );
 
+    let create_ata_ix = spl_associated_token_account::instruction::create_associated_token_account(
+        &wallet_keypair.pubkey(),
+        &wallet_keypair.pubkey(),
+        &mint_account,
+        &spl_token_2022::id(),
+    );
 
     // mint amount token to ata account
     let mint_token_ix = spl_token_2022::instruction::mint_to(
@@ -144,7 +141,7 @@ mod tests {
             Pubkey::from_str("5LdzEFRMQy2SCf2SD4TXkRao8ELh7FZAzqQGia5DNxKE").unwrap();
         let amount = 999 * 10_u64.pow(9);
         let instructions =
-            prepare_mint_token_instruction(&mint_account, &wallet_keypair, amount,false);
+            prepare_mint_token_instruction(&mint_account, &wallet_keypair, amount, false);
         println!("instructions: {}", instructions.len());
 
         let solana_client =
