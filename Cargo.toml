@@ -19,3 +19,7 @@ solana-sdk = "=1.18.23"
 solana-client = "=1.18.23"
 spl-token-2022 = "=3.0.4"
 spl-associated-token-account = "=3.0.4"
+anchor-client = "0.29.0"
+spl-memo = "4.0.0"
+
+raydium-cp-swap = { git = "https://github.com/raydium-io/raydium-cp-swap", branch = "master" }

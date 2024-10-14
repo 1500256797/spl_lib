@@ -1,12 +1,13 @@
-use mpl_token_metadata::instructions::{CreateV1, CreateV1InstructionArgs};
-use solana_client::nonblocking::rpc_client::RpcClient;
+use mpl_token_metadata::accounts::{MasterEdition, Metadata};
+use mpl_token_metadata::instructions::{CreateV1, CreateV1Builder, CreateV1InstructionArgs};
+use mpl_token_metadata::types::{PrintSupply, TokenStandard};
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::transaction::Transaction;
 use solana_sdk::{instruction::Instruction, native_token::LAMPORTS_PER_SOL};
 use solana_sdk::{
     program_pack::Pack,
-    pubkey::Pubkey,
     signature::{Keypair, Signer},
     system_instruction,
-    transaction::Transaction,
 };
 use spl_token_2022::state::Mint;
 // concept
@@ -18,29 +19,102 @@ use spl_token_2022::state::Mint;
 // An Associated Token Account is a Token Account created with an address derived from the owner's and mint account's addresses.
 // https://spl.solana.com/token
 
-// init a mint account
-pub fn new_mint_account(wallet_account: &Keypair) -> Vec<Instruction> {
-    let mint_account = Keypair::new();
-    /// mint rent = 0.01 sol
-    let mint_rent = 0.01 * LAMPORTS_PER_SOL as f64;
+pub fn prepare_deploy_token_with_metadata_instructions(
+    mint_account: &Keypair,
+    wallet_keypair: &Keypair,
+) -> Vec<Instruction> {
+    let solana_client =
+        solana_client::rpc_client::RpcClient::new("https://api.devnet.solana.com".to_string());
+    let mint_account = mint_account.pubkey();
+    let mint_rent = solana_client
+        .get_minimum_balance_for_rent_exemption(Mint::LEN)
+        .unwrap();
+    // create empty account ( space )
     let create_account_space_ix = system_instruction::create_account(
-        &wallet_account.pubkey(),
-        &mint_account.pubkey(),
+        &wallet_keypair.pubkey(),
+        &mint_account,
         mint_rent as u64,
         Mint::LEN as u64,
         &spl_token_2022::id(),
     );
 
-    let default_decimals = 9;
+    // initialize mint account (init this space)
     let mint_account_init_ix = spl_token_2022::instruction::initialize_mint(
         &spl_token_2022::id(),
-        &mint_account.pubkey(),
-        &wallet_account.pubkey(),
-        Some(&wallet_account.pubkey()),
-        default_decimals,
+        &mint_account,
+        &wallet_keypair.pubkey(),
+        Some(&wallet_keypair.pubkey()),
+        9,
     )
     .unwrap();
-    vec![create_account_space_ix, mint_account_init_ix]
+
+    // update mint account detail
+    let payer = wallet_keypair.pubkey();
+    let master_edition_pda = MasterEdition::find_pda(&mint_account);
+    // instruction args
+    let create_ix = CreateV1Builder::new()
+            .metadata(Metadata::find_pda(&mint_account).0)
+            .master_edition(Some(master_edition_pda.0))
+            .mint(mint_account, false)
+            .authority(payer)
+            .payer(payer)
+            .update_authority(payer, true)
+            .is_mutable(true)
+            .primary_sale_happened(false)
+            .name(String::from("NewsMeMe"))
+            .uri(String::from("https://white-historical-basilisk-887.mypinata.cloud/ipfs/QmVd6xVRqg9sJQP1zkUVizZ7jah6zD7j6fSPn9F7MRjZMo"))
+            .seller_fee_basis_points(500)
+            .token_standard(TokenStandard::Fungible)
+            .print_supply(PrintSupply::Limited(10000000000000000))
+            .instruction();
+
+    vec![create_account_space_ix, mint_account_init_ix, create_ix]
+}
+
+pub fn prepare_mint_token_instruction(
+    mint_account: &Pubkey,
+    wallet_keypair: &Keypair,
+    amount: u64,
+    need_create_ata: bool,
+) -> Vec<Instruction> {
+    // The Associated Token Program uses Cross Program Invocations to handle:
+    // Invoking the System Program to create a new account using the provided PDA as the address of the new account
+    // Invoking the Token Program to initialize the Token Account data for the new account.
+           // 使用 create_associated_token_account = system_instruction::create_account + spl_token_2022::instruction::initialize_account3 + .....
+        // https://explorer.solana.com/tx/58EDj9im952aomeiqa6iWH7wWA9uyQtWAHRJDXUE4by63jckAHMbMWkoAxsTF1JBvF8t2TWPvGQ9fCTpqbyJ8UjK?cluster=devnet
+    let ata_account =
+        spl_associated_token_account::get_associated_token_address_with_program_id(
+            &wallet_keypair.pubkey(),
+            &mint_account,
+            &spl_token_2022::id(),
+        );
+    println!("ata_account: {}", ata_account.to_string());
+    
+    let create_ata_ix =
+        spl_associated_token_account::instruction::create_associated_token_account(
+            &wallet_keypair.pubkey(),
+            &wallet_keypair.pubkey(),
+            &mint_account,
+            &spl_token_2022::id(),
+        );
+
+
+    // mint amount token to ata account
+    let mint_token_ix = spl_token_2022::instruction::mint_to(
+        &spl_token_2022::id(),
+        &mint_account,
+        &ata_account,
+        &wallet_keypair.pubkey(),
+        vec![&wallet_keypair.pubkey()].as_slice(),
+        amount,
+    )
+    .unwrap();
+
+    if need_create_ata {
+        vec![create_ata_ix, mint_token_ix]
+    } else {
+        vec![mint_token_ix]
+    }
 }
 
 #[cfg(test)]
@@ -51,11 +125,67 @@ mod tests {
     use mpl_token_metadata::{
         accounts::{MasterEdition, Metadata},
         instructions::CreateV1Builder,
-        types::{Creator, Key, PrintSupply, TokenStandard},
+        types::{PrintSupply, TokenStandard},
     };
-    use solana_client::nonblocking::rpc_client::RpcClient;
-    use solana_sdk::feature_set::spl_associated_token_account_v1_1_0;
+    use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
     use spl_token_2022::id;
+
+    #[test]
+    fn test_mint_token_instruction() {
+        // https://explorer.solana.com/address/Bm1mYeDfqyVdLCuvSTBpJjSnZApftetPQJ9MYHqfFL3Q/tokens?cluster=devnet
+        let wallet_keypair = Keypair::from_bytes(&[
+            209, 77, 194, 225, 64, 117, 226, 133, 133, 78, 162, 100, 82, 186, 248, 218, 177, 68,
+            141, 213, 3, 127, 245, 190, 4, 30, 250, 40, 254, 7, 32, 26, 126, 111, 52, 235, 27, 57,
+            65, 27, 193, 119, 167, 112, 155, 211, 191, 153, 125, 177, 216, 172, 95, 17, 157, 120,
+            98, 170, 226, 75, 220, 140, 11, 41,
+        ])
+        .unwrap();
+        let mint_account =
+            Pubkey::from_str("5LdzEFRMQy2SCf2SD4TXkRao8ELh7FZAzqQGia5DNxKE").unwrap();
+        let amount = 999 * 10_u64.pow(9);
+        let instructions =
+            prepare_mint_token_instruction(&mint_account, &wallet_keypair, amount,false);
+        println!("instructions: {}", instructions.len());
+
+        let solana_client =
+            solana_client::rpc_client::RpcClient::new("https://api.devnet.solana.com".to_string());
+        let transaction: Transaction = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&wallet_keypair.pubkey()),
+            &[&wallet_keypair],
+            solana_client.get_latest_blockhash().unwrap(),
+        );
+
+        solana_client
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .unwrap();
+    }
+    #[test]
+    fn test_deploy_token_with_metadata() {
+        let mint_account = Keypair::new();
+        let wallet_keypair = Keypair::from_bytes(&[
+            209, 77, 194, 225, 64, 117, 226, 133, 133, 78, 162, 100, 82, 186, 248, 218, 177, 68,
+            141, 213, 3, 127, 245, 190, 4, 30, 250, 40, 254, 7, 32, 26, 126, 111, 52, 235, 27, 57,
+            65, 27, 193, 119, 167, 112, 155, 211, 191, 153, 125, 177, 216, 172, 95, 17, 157, 120,
+            98, 170, 226, 75, 220, 140, 11, 41,
+        ])
+        .unwrap();
+        let instructions =
+            prepare_deploy_token_with_metadata_instructions(&mint_account, &wallet_keypair);
+        println!("instructions: {}", instructions.len());
+        let solana_client =
+            solana_client::rpc_client::RpcClient::new("https://api.devnet.solana.com".to_string());
+        let transaction: Transaction = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&wallet_keypair.pubkey()),
+            &[&wallet_keypair, &mint_account],
+            solana_client.get_latest_blockhash().unwrap(),
+        );
+
+        solana_client
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .unwrap();
+    }
     #[test]
     fn test_new_solana_test_account() {
         // ~ solana-keygen new -o /Users/jianjianjianjian/.config/solana/id.json
