@@ -3,7 +3,7 @@ pub mod freeze;
 pub mod mint_to;
 pub mod transfer_to;
 pub mod unfreeze;
-
+pub mod transfer_sol;
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

@@ -23,3 +23,6 @@ anchor-client = "0.29.0"
 spl-memo = "4.0.0"
 
 raydium-cp-swap = { git = "https://github.com/raydium-io/raydium-cp-swap", branch = "master" }
+bitcoin = "0.32.3"
+hex = "0.4.3"
+bip39 = "2.1.0"
